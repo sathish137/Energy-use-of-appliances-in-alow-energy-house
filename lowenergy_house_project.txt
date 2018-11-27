@@ -1,0 +1,215 @@
+energy_data <- read.csv(file.choose())
+
+energy_data$date <- strptime(as.character(energy_data$date),format="%Y-%m-%d %H:%M:%S")
+energy_data$date <- as.POSIXct(energy_data$date,tz = "UTC")
+class(energy_data$date)
+str(energy_data)
+
+names(energy_data)
+library(rpart)    
+library(partykit) 
+library(gbm)      
+library(doParallel)
+library(pROC)      
+library(corrplot)  
+library(psych)
+library(Hmisc)
+library(lubridate)
+
+second_day <- function(x) 
+  {
+    s <- hour(x)*3600+minute(x)*60+second(x)
+  }
+
+weekend_weekday <- function(x) {
+  val <- weekdays(x)
+  if (val == "Saturday" | val == "Sunday") {
+    val2 = "Weekend"
+  }
+  else {
+    val2= "Weekday"
+  }
+  return(val2)
+}
+
+
+
+energy_data$NSM <- second_day(energy_data$date)
+
+energy_data$WeekStatus <- unlist(lapply(energy_data$date,weekend_weekday))
+
+energy_data$Day_of_week <-weekdays(energy_data$date)
+
+names(energy_data)
+energy_data <- read.csv(file.choose())
+# Reading the training data
+
+energy_data$my <- NULL
+energy_data$mhr <- NULL
+names(energy_data)
+
+
+
+library(caret)
+set.seed(1)
+train_index <- createDataPartition(energy_data$Appliances,p=0.75,list=FALSE)
+
+train_data <- energy_data[train_index,]
+dim(train_data)
+names(train_data)
+
+
+#View(energy_data)
+
+train_data$date <- strptime(as.character(train_data$date),format="%Y-%m-%d %H:%M:%S")
+train_data$date <- as.POSIXct(train_data$date,tz = "UTC")
+class(train_data$date)
+str(train_data)
+
+
+# creating the testing set here
+
+test_data <- energy_data[-train_index,]
+dim(test_data)
+
+
+test_data$date <- strptime(as.character(test_data$date),format="%Y-%m-%d %H:%M:%S")
+test_data$date <- as.POSIXct(test_data$date,tz = "UTC")
+
+
+names(train_data)
+data1 <- read.csv(file.choose())
+
+# Boruta algorithm
+
+head(train_data)
+boruta.train <- train_data
+dim(boruta.train)
+names(boruta.train[,c(2:32)])
+str(boruta.train[,c(2:32)])
+set.seed(1234)
+boruta1<- boruta.train[,c(2:32)][sample(1:nrow(boruta.train), 152,
+                                        replace=FALSE),]
+head(boruta1)
+dim(boruta1)
+set.seed(1234)
+Boruta.Appliances1<- Boruta(Appliances~., data=boruta1,  doTrace = 2,ntree = 115)
+Boruta.Appliances1
+plot(Boruta.Appliances1)
+
+# Multiple linear resgression
+
+
+lmcvFit <- train(Appliances~., data=train_data[,c(2:30)],  method="lm",trControl = fitControl,
+                 metric='RMSE')
+
+lmcvFit
+
+summary(lmcvFit)
+
+
+residuals<-resid(lmcvFit)
+
+
+plot(data1$Appliances,residuals,xlab="Appliances Energy consumption", ylab="Residuals")
+
+
+# GBM
+library(gbm)
+library(MASS)
+fitControl <- trainControl(method = "repeatedcv",number=10,repeats=3,  
+                           verboseIter = TRUE,returnResamp = "all")
+
+
+gbmGrid <-  expand.grid(interaction.depth = c(1,3,5),n.trees = seq(100,10901,400),
+                        shrinkage = 0.1,n.minobsinnode = c(10))
+
+
+set.seed(1)
+registerDoParallel(4)
+getDoParWorkers()
+
+ptm <- proc.time()
+
+gbm_model <- train(Appliances~., data=train_data[,c(2:30)],  method="gbm",
+                   metric='RMSE',trControl = fitControl,bag.fraction=0.5,tuneGrid=gbmGrid)
+
+
+gbm_model$call
+
+gbm_model
+plot(gbm_model)
+
+summary(model2)
+
+# RandomForest
+
+library(randomForest)
+fitControl <- trainControl(method = "repeatedcv",number=10,
+                           repeats=3,verboseIter = TRUE,returnResamp = "all")
+set.seed(1)
+registerDoParallel(4)
+getDoParWorkers()
+
+rf <- train(Appliances~., data=train_data[,c(2:30)],method="rf",metric='RMSE',
+                                trControl=fitControl,importance = TRUE )
+
+
+rf 
+
+plot(rf)
+
+print(rf)
+
+# svm model
+library(caret)
+library(kernlab)
+library(ROCR)
+
+grid <- expand.grid(sigma = c(.01, .015, 0.2),
+                    C = c(0.75, 0.9, 1, 1.1, 1.25))
+
+set.seed(1)
+registerDoParallel(4)
+getDoParWorkers()
+
+ptm <- proc.time()
+svm_model <- train(Appliances~., data=train_data[,c(2:30)],  method="svmRadial",
+                   metric='RMSE',trControl = fitControl, preProc=c("center","scale"),
+                   tuneGrid = grid)
+svm_time <- proc.time() - ptm
+svm_time
+print(svm_model)
+plot(svm_model)
+
+
+# comparision
+
+Rsqu <- function(y, yhat) 
+  {
+      mdata <- mean(y)
+      1 - sum((y-yhat)^2)/(sum((y-mdata)^2))
+  }
+
+Rmse <- function(y, yhat) 
+  {
+  
+    sqrt(mean((y-yhat)^2))
+  }
+
+
+# gradient boosting machine
+Rmse(train_data$Appliances,predict(gbm_model,train_data[,c(2:30)]))
+Rsqu(train_data$Appliances,predict(gbm_model,train_data[,c(2:30)]))
+
+# linear multiple model
+Rmse(train_data$Appliances,predict(lmcvFit,train_data[,c(2:30)]))
+Rsqu(train_data$Appliances,predict(lmcvFit,train_data[,c(2:30)]))
+
+# svm
+Rmse(train_data$Appliances,predict(svm_model,train_data[,c(2:30)]))
+Rsqu(train_data$Appliances,predict(svm_model,train_data[,c(2:30)]))
+
+# random forest
+Rmse(train_data$Appliances,predict(rf_default,train_data[,c(2:30)]))
+Rsqu(train_data$Appliances,predict(rf_default,train_data[,c(2:30)]))
